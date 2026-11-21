@@ -1,0 +1,760 @@
+         <!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Скелети — 3D Файтинг</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#07070d;
+    font-family:'Trebuchet MS', system-ui, sans-serif; user-select:none; }
+  canvas { display:block; }
+
+  #hud { position:fixed; inset:0; pointer-events:none; padding:18px 26px;
+    display:flex; flex-direction:column; }
+
+  .row { display:flex; justify-content:space-between; align-items:flex-start; gap:20px; }
+
+  .side { width:37%; }
+  .side.right { text-align:right; }
+
+  .name { font-size:13px; letter-spacing:3px; font-weight:bold; margin-bottom:7px;
+    color:#8fb2ff; text-shadow:0 0 14px #2f6bff, 0 0 4px #2f6bff; }
+  .side.right .name { color:#ffb083; text-shadow:0 0 14px #ff5a1f, 0 0 4px #ff5a1f; }
+
+  .bar { height:16px; display:flex; background:rgba(255,255,255,.06);
+    border:1px solid rgba(255,255,255,.16); border-radius:9px; overflow:hidden;
+    box-shadow:inset 0 0 14px rgba(0,0,0,.9), 0 0 12px rgba(0,0,0,.6); }
+  .side.right .bar { justify-content:flex-end; }
+
+  .fill { height:100%; width:100%; transition:width .12s linear; border-radius:8px; }
+  #hp0 { background:linear-gradient(90deg,#1235c9,#5aa2ff); box-shadow:0 0 16px #3f7bff; }
+  #hp1 { background:linear-gradient(270deg,#c93a10,#ffb03a); box-shadow:0 0 16px #ff7a2f; }
+
+  .score { font-size:44px; font-weight:bold; line-height:1; margin-top:6px;
+    color:#dbe6ff; text-shadow:0 0 20px #3f7bff, 0 0 46px #1a3fb0; }
+  .side.right .score { text-shadow:0 0 20px #ff7a2f, 0 0 46px #b03a10; }
+
+  .center { text-align:center; flex:1; }
+  .vs { font-size:30px; font-weight:bold; letter-spacing:4px; color:#fff;
+    text-shadow:0 0 18px #fff, 0 0 40px #6f8cff; animation:pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:.55; transform:scale(1);} 50%{opacity:1; transform:scale(1.08);} }
+  .round { margin-top:6px; font-size:12px; letter-spacing:4px; color:#7e8aa8; }
+
+  #banner { position:fixed; inset:0; display:flex; align-items:center; justify-content:center;
+    pointer-events:none; font-size:64px; font-weight:bold; letter-spacing:10px; color:#fff;
+    text-shadow:0 0 30px #6f8cff, 0 0 80px #2f6bff; opacity:0; transition:opacity .25s; }
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <div class="row">
+    <div class="side left">
+      <div class="name">СКЕЛЕТ · КРИГА</div>
+      <div class="bar"><div class="fill" id="hp0"></div></div>
+      <div class="score" id="sc0">0</div>
+    </div>
+    <div class="center">
+      <div class="vs">VS</div>
+      <div class="round" id="round">РАУНД 1</div>
+    </div>
+    <div class="side right">
+      <div class="name">СКЕЛЕТ · ПОЛУМ'Я</div>
+      <div class="bar"><div class="fill" id="hp1"></div></div>
+      <div class="score" id="sc1">0</div>
+    </div>
+  </div>
+</div>
+<div id="banner"></div>
+
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+
+/* ================= СЦЕНА ================= */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x07070d);
+scene.fog = new THREE.FogExp2(0x07070d, 0.028);
+
+const camera = new THREE.PerspectiveCamera(42, innerWidth/innerHeight, 0.1, 200);
+camera.position.set(0, 3.5, 9.5);
+camera.lookAt(0, 1.35, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true, powerPreference:'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ================= СВІТЛО ================= */
+scene.add(new THREE.AmbientLight(0x5566aa, 1.1));
+scene.add(new THREE.HemisphereLight(0x8899ff, 0x221133, 1.0));
+
+const key = new THREE.DirectionalLight(0xffffff, 2.0);
+key.position.set(5, 12, 7);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -9; key.shadow.camera.right = 9;
+key.shadow.camera.top = 9;   key.shadow.camera.bottom = -9;
+key.shadow.bias = -0.0008;
+scene.add(key);
+
+const lightA = new THREE.PointLight(0x3f7bff, 90, 26, 2);
+lightA.position.set(-5.5, 3.2, 3.5);
+scene.add(lightA);
+
+const lightB = new THREE.PointLight(0xff6a2a, 90, 26, 2);
+lightB.position.set(5.5, 3.2, 3.5);
+scene.add(lightB);
+
+/* ================= АРЕНА ================= */
+const floor = new THREE.Mesh(
+  new THREE.CircleGeometry(7.2, 64),
+  new THREE.MeshStandardMaterial({ color:0x14141f, roughness:0.85, metalness:0.25 })
+);
+floor.rotation.x = -Math.PI/2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+const ring = new THREE.Mesh(
+  new THREE.TorusGeometry(7.0, 0.06, 8, 80),
+  new THREE.MeshBasicMaterial({ color:0x4d7bff })
+);
+ring.rotation.x = -Math.PI/2;
+ring.position.y = 0.03;
+scene.add(ring);
+
+const ring2 = new THREE.Mesh(
+  new THREE.TorusGeometry(3.2, 0.02, 6, 60),
+  new THREE.MeshBasicMaterial({ color:0x2a3a70 })
+);
+ring2.rotation.x = -Math.PI/2;
+ring2.position.y = 0.02;
+scene.add(ring2);
+
+// декоративні колони
+for (let i = 0; i < 10; i++) {
+  const a = i / 10 * Math.PI * 2;
+  const col = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.16, 0.22, 3.2, 6),
+    new THREE.MeshStandardMaterial({ color:0x1b1b28, roughness:0.9, metalness:0.3 })
+  );
+  col.position.set(Math.cos(a)*8.4, 1.6, Math.sin(a)*8.4);
+  col.castShadow = true;
+  scene.add(col);
+}
+
+/* ================= ЕФЕКТИ ================= */
+const sparkGeo = new THREE.SphereGeometry(0.045, 6, 6);
+const particles = [];
+
+function burst(x, y, z, colorHex, count = 9) {
+  for (let i = 0; i < count; i++) {
+    const m = new THREE.Mesh(sparkGeo, new THREE.MeshBasicMaterial({
+      color: colorHex, transparent: true, opacity: 1
+    }));
+    m.position.set(x, y, z);
+    scene.add(m);
+    particles.push({
+      m,
+      v: new THREE.Vector3(
+        (Math.random()-0.5)*5.5,
+        Math.random()*3.6 - 0.4,
+        (Math.random()-0.5)*4.5
+      ),
+      life: 0,
+      max: 0.45 + Math.random()*0.25
+    });
+  }
+}
+
+let shake = 0;
+
+/* ================= СКЕЛЕТ ================= */
+function createSkeleton(glowHex) {
+  const glow = new THREE.Color(glowHex);
+  const boneMat = new THREE.MeshStandardMaterial({
+    color: 0xE9E2CF, roughness: 0.72, metalness: 0.05,
+    emissive: glow.clone().multiplyScalar(0.14), emissiveIntensity: 1
+  });
+  const glowMat = new THREE.MeshBasicMaterial({ color: glowHex });
+  const socketMat = new THREE.MeshBasicMaterial({ color: 0x0a0a12 });
+
+  const root = new THREE.Group();
+
+  const cyl = (rt, rb, h, seg = 7) => {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg), boneMat);
+    m.castShadow = true; return m;
+  };
+  const box = (w, h, d) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), boneMat);
+    m.castShadow = true; return m;
+  };
+  const ball = (r, seg = 10) => {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, seg, seg), boneMat);
+    m.castShadow = true; return m;
+  };
+
+  /* --- таз --- */
+  const pelvis = box(0.32, 0.15, 0.2);
+  pelvis.position.y = 1.0;
+  root.add(pelvis);
+
+  const pelvisBallL = ball(0.06, 8); pelvisBallL.position.set(-0.14, 0.97, 0); root.add(pelvisBallL);
+  const pelvisBallR = ball(0.06, 8); pelvisBallR.position.set( 0.14, 0.97, 0); root.add(pelvisBallR);
+
+  /* --- хребет --- */
+  const spine = new THREE.Group();
+  spine.position.y = 1.07;
+  root.add(spine);
+
+  for (let i = 0; i < 6; i++) {
+    const v = cyl(0.031, 0.038, 0.07, 6);
+    v.position.y = i * 0.072;
+    spine.add(v);
+  }
+
+  /* --- ребра --- */
+  const ribYs = [0.12, 0.20, 0.28, 0.35];
+  const ribRs = [0.15, 0.185, 0.19, 0.16];
+  ribYs.forEach((y, i) => {
+    const rib = new THREE.Mesh(new THREE.TorusGeometry(ribRs[i], 0.02, 5, 18), boneMat);
+    rib.rotation.x = Math.PI / 2;
+    rib.scale.set(1, 0.62, 1);
+    rib.position.set(0, y, -0.01);
+    rib.castShadow = true;
+    spine.add(rib);
+  });
+
+  const sternum = box(0.05, 0.26, 0.03);
+  sternum.position.set(0, 0.235, 0.112);
+  spine.add(sternum);
+
+  /* --- ключиці --- */
+  const clav = box(0.44, 0.045, 0.05);
+  clav.position.set(0, 0.43, 0);
+  spine.add(clav);
+
+  /* --- голова --- */
+  const head = new THREE.Group();
+  head.position.set(0, 0.47, 0);
+  spine.add(head);
+
+  const neck = cyl(0.04, 0.046, 0.09, 6);
+  neck.position.y = 0.03;
+  head.add(neck);
+
+  const skull = ball(0.135, 12);
+  skull.scale.set(1, 1.12, 1.02);
+  skull.position.y = 0.17;
+  head.add(skull);
+
+  const jaw = box(0.16, 0.055, 0.15);
+  jaw.position.set(0, 0.075, 0.025);
+  head.add(jaw);
+
+  [-0.055, 0.055].forEach(x => {
+    const socket = new THREE.Mesh(new THREE.SphereGeometry(0.033, 10, 10), socketMat);
+    socket.position.set(x, 0.185, 0.112);
+    head.add(socket);
+    const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.017, 8, 8), glowMat);
+    pupil.position.set(x, 0.185, 0.134);
+    head.add(pupil);
+  });
+
+  /* --- руки --- */
+  function makeArm(side) { // side: -1 ліва, +1 права
+    const shoulder = new THREE.Group();
+    shoulder.position.set(side * 0.225, 0.42, 0);
+    spine.add(shoulder);
+
+    const sBall = ball(0.058, 9);
+    shoulder.add(sBall);
+
+    const upper = cyl(0.031, 0.028, 0.34, 6);
+    upper.position.y = -0.17;
+    shoulder.add(upper);
+
+    const elbow = new THREE.Group();
+    elbow.position.y = -0.34;
+    shoulder.add(elbow);
+
+    const eBall = ball(0.042, 8);
+    elbow.add(eBall);
+
+    const lower = cyl(0.027, 0.024, 0.32, 6);
+    lower.position.y = -0.16;
+    elbow.add(lower);
+
+    const hand = box(0.075, 0.1, 0.05);
+    hand.position.y = -0.37;
+    elbow.add(hand);
+
+    return { shoulder, elbow };
+  }
+
+  const armL = makeArm(-1);
+  const armR = makeArm(1);
+
+  /* --- ноги --- */
+  function makeLeg(side) {
+    const hip = new THREE.Group();
+    hip.position.set(side * 0.115, 0.99, 0);
+    root.add(hip);
+
+    const thigh = cyl(0.041, 0.036, 0.45, 6);
+    thigh.position.y = -0.225;
+    hip.add(thigh);
+
+    const knee = new THREE.Group();
+    knee.position.y = -0.45;
+    hip.add(knee);
+
+    const kBall = ball(0.048, 8);
+    knee.add(kBall);
+
+    const shin = cyl(0.035, 0.03, 0.45, 6);
+    shin.position.y = -0.225;
+    knee.add(shin);
+
+    const foot = box(0.1, 0.055, 0.21);
+    foot.position.set(0, -0.47, 0.055);
+    knee.add(foot);
+
+    return { hip, knee };
+  }
+
+  const legL = makeLeg(-1);
+  const legR = makeLeg(1);
+
+  return {
+    root,
+    parts: {
+      spine, head,
+      shoulderL: armL.shoulder, elbowL: armL.elbow,
+      shoulderR: armR.shoulder, elbowR: armR.elbow,
+      hipL: legL.hip, kneeL: legL.knee,
+      hipR: legR.hip, kneeR: legR.knee
+    }
+  };
+}
+
+/* ================= БОЄЦЬ ================= */
+const easeOut = t => 1 - Math.pow(1 - t, 3);
+const easeIn  = t => t * t * t;
+
+class Fighter {
+  constructor(glowHex, startX, faceDir) {
+    this.glowHex = glowHex;
+    this.faceDir = faceDir;               // +1 = дивиться в +X
+
+    const s = createSkeleton(glowHex);
+    this.root = s.root;
+    this.p = s.parts;
+
+    this.pivot = new THREE.Group();
+    this.pivot.position.set(startX, 0, 0);
+    this.root.rotation.y = faceDir > 0 ? Math.PI / 2 : -Math.PI / 2;
+    this.pivot.add(this.root);
+    scene.add(this.pivot);
+
+    this.hp = 100;
+    this.maxHp = 100;
+    this.state = 'idle';
+    this.t = 0;
+    this.animT = Math.random() * 10;
+    this.deathT = 0;
+    this.idleWait = 0.25 + Math.random() * 0.5;
+    this.hitDone = false;
+    this.attackType = 'punch';
+    this.armSide = 1;
+    this.legSide = 1;
+  }
+
+  setState(s) {
+    this.state = s;
+    this.t = 0;
+  }
+
+  resetPose() {
+    const p = this.p;
+    p.spine.position.set(0, 1.07, 0);
+    p.spine.rotation.set(0, 0, 0);
+    p.head.rotation.set(0, 0, 0);
+    p.shoulderL.rotation.set(0, 0, -0.13);
+    p.shoulderR.rotation.set(0, 0,  0.13);
+    p.elbowL.rotation.set(-0.22, 0, 0);
+    p.elbowR.rotation.set(-0.22, 0, 0);
+    p.hipL.rotation.set(0, 0, -0.045);
+    p.hipR.rotation.set(0, 0,  0.045);
+    p.kneeL.rotation.set(0.08, 0, 0);
+    p.kneeR.rotation.set(0.08, 0, 0);
+    this.root.position.y = 0;
+  }
+
+  /* ---------- пози ---------- */
+  poseIdle() {
+    const t = this.animT, p = this.p;
+    const b = Math.sin(t * 2.3);
+    p.spine.position.y = 1.07 + b * 0.012;
+    p.spine.rotation.z = Math.sin(t * 1.5) * 0.03;
+    p.head.rotation.y = Math.sin(t * 0.8) * 0.18;
+    p.head.rotation.x = Math.sin(t * 1.1) * 0.05;
+    p.shoulderL.rotation.x =  b * 0.09;
+    p.shoulderR.rotation.x = -b * 0.09;
+    p.kneeL.rotation.x = 0.12 + b * 0.05;
+    p.kneeR.rotation.x = 0.12 - b * 0.05;
+    p.hipL.rotation.x = -0.06;
+    p.hipR.rotation.x = -0.06;
+    this.root.position.y = -0.015;
+  }
+
+  poseWalk(phase) {
+    const s = Math.sin(phase), c = Math.cos(phase), p = this.p;
+    p.hipL.rotation.x =  s * 0.55;
+    p.hipR.rotation.x = -s * 0.55;
+    p.kneeL.rotation.x = Math.max(0, -s) * 0.75 + 0.08;
+    p.kneeR.rotation.x = Math.max(0,  s) * 0.75 + 0.08;
+    p.shoulderL.rotation.x = -s * 0.42;
+    p.shoulderR.rotation.x =  s * 0.42;
+    p.spine.position.y = 1.07 + Math.abs(c) * 0.028;
+    p.spine.rotation.z = s * 0.04;
+    this.root.position.y = 0;
+  }
+
+  poseAttack(type, prog) {
+    const p = this.p;
+    // крива: швидкий випад, повільне повернення
+    const k = prog < 0.3 ? easeOut(prog / 0.3) : 1 - easeIn((prog - 0.3) / 0.7);
+
+    if (type === 'punch') {
+      const sh  = this.armSide === 1 ? p.shoulderR : p.shoulderL;
+      const el  = this.armSide === 1 ? p.elbowR   : p.elbowL;
+      const osh = this.armSide === 1 ? p.shoulderL : p.shoulderR;
+      const sign = this.armSide;
+
+      sh.rotation.x = -k * Math.PI * 0.5;
+      sh.rotation.z = sign * (0.13 - k * 0.09);
+      el.rotation.x = -0.22 + k * 0.18;
+
+      osh.rotation.x = k * 0.45;
+
+      p.spine.rotation.y = -sign * k * 0.38;
+      p.spine.rotation.x = k * 0.07;
+      p.head.rotation.y = -sign * k * 0.15;
+
+      p.kneeL.rotation.x = 0.14 + k * 0.1;
+      p.kneeR.rotation.x = 0.14 + k * 0.1;
+      this.root.position.y = -0.02 * k;
+    } else {
+      const hip  = this.legSide === 1 ? p.hipR  : p.hipL;
+      const knee = this.legSide === 1 ? p.kneeR : p.kneeL;
+      const standKnee = this.legSide === 1 ? p.kneeL : p.kneeR;
+      const standHip  = this.legSide === 1 ? p.hipL  : p.hipR;
+
+      hip.rotation.x = -k * Math.PI * 0.5;
+      knee.rotation.x = (1 - k) * 0.9 + k * 0.02;
+
+      standHip.rotation.x = 0.15 * k;
+      standKnee.rotation.x = 0.35 * k;
+
+      p.spine.rotation.x = -k * 0.3;
+      p.head.rotation.x = k * 0.2;
+      p.shoulderL.rotation.x = -k * 0.5;
+      p.shoulderR.rotation.x = -k * 0.5;
+
+      this.root.position.y = -0.04 * k;
+    }
+  }
+
+  poseHurt() {
+    const p = this.p;
+    const a = Math.min(1, this.t / 0.08);
+    const b = Math.max(0, 1 - Math.max(0, (this.t - 0.14) / 0.18));
+    const k = a * b;
+    p.spine.rotation.x = -k * 0.42;
+    p.head.rotation.x = -k * 0.35;
+    p.shoulderL.rotation.x = k * 0.55;
+    p.shoulderR.rotation.x = k * 0.55;
+    p.elbowL.rotation.x = -0.22 - k * 0.5;
+    p.elbowR.rotation.x = -0.22 - k * 0.5;
+    p.kneeL.rotation.x = 0.1 + k * 0.2;
+    p.kneeR.rotation.x = 0.1 + k * 0.2;
+    this.root.position.y = -k * 0.05;
+  }
+
+  /* ---------- логіка ---------- */
+  startAttack() {
+    this.attackType = Math.random() < 0.62 ? 'punch' : 'kick';
+    this.armSide = Math.random() < 0.5 ? 1 : -1;
+    this.legSide = Math.random() < 0.5 ? 1 : -1;
+    this.hitDone = false;
+    this.setState(this.attackType);
+  }
+
+  takeHit(dmg) {
+    if (this.state === 'dead') return;
+
+    this.hp -= dmg;
+    shake = Math.max(shake, 0.16);
+    burst(
+      this.pivot.position.x - this.faceDir * 0.25,
+      1.25 + Math.random() * 0.45,
+      (Math.random() - 0.5) * 0.3,
+      this.glowHex, 8
+    );
+
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.setState('dead');
+      this.deathT = 0;
+    } else {
+      this.setState('hurt');
+      this.pivot.position.x -= this.faceDir * 0.17;
+    }
+  }
+
+  update(dt, opp) {
+    this.animT += dt;
+    this.t += dt;
+
+    /* --- смерть --- */
+    if (this.state === 'dead') {
+      this.deathT += dt;
+      const k = Math.min(1, this.deathT / 0.85);
+      this.pivot.rotation.z = this.faceDir * k * k * 1.42;
+      const p = this.p;
+      p.head.rotation.x = k * 0.5;
+      p.shoulderL.rotation.x = -k * 0.9;
+      p.shoulderR.rotation.x = -k * 0.9;
+      p.kneeL.rotation.x = k * 0.7;
+      p.kneeR.rotation.x = k * 0.4;
+      return;
+    }
+
+    this.resetPose();
+
+    const dx = opp.pivot.position.x - this.pivot.position.x;
+    const dist = Math.abs(dx);
+    const toward = dx > 0 ? 1 : -1;
+
+    /* --- розвертаємось до суперника --- */
+    if (toward !== this.faceDir) {
+      this.faceDir = toward;
+      this.root.rotation.y = toward > 0 ? Math.PI / 2 : -Math.PI / 2;
+    }
+
+    switch (this.state) {
+      case 'idle': {
+        this.poseIdle();
+        if (this.t > this.idleWait) {
+          if (dist > 1.45) this.setState('approach');
+          else this.startAttack();
+        }
+        break;
+      }
+
+      case 'approach': {
+        const speed = 1.9;
+        this.pivot.position.x += this.faceDir * speed * dt;
+        this.poseWalk(this.animT * 9);
+        if (dist <= 1.32) {
+          this.setState('idle');
+          this.idleWait = 0.05;
+        }
+        break;
+      }
+
+      case 'punch':
+      case 'kick': {
+        const dur = this.state === 'punch' ? 0.42 : 0.62;
+        const hitTime = this.state === 'punch' ? 0.155 : 0.27;
+        const range = this.state === 'punch' ? 1.62 : 1.9;
+        const prog = this.t / dur;
+
+        if (!this.hitDone && this.t >= hitTime) {
+          this.hitDone = true;
+          if (dist < range) {
+            this.takeHitOn(opp);
+          }
+        }
+
+        this.poseAttack(this.state, Math.min(prog, 1));
+
+        if (prog >= 1) {
+          this.setState('idle');
+          this.idleWait = 0.14 + Math.random() * 0.4;
+        }
+        break;
+      }
+
+      case 'hurt': {
+        this.poseHurt();
+        if (this.t > 0.33) {
+          this.setState('idle');
+          this.idleWait = 0.06 + Math.random() * 0.2;
+        }
+        break;
+      }
+    }
+
+    // не виходимо за арену
+    this.pivot.position.x = Math.max(-5.5, Math.min(5.5, this.pivot.position.x));
+  }
+
+  takeHitOn(opp) {
+    const dmg = this.state === 'punch'
+      ? 6 + Math.random() * 5
+      : 10 + Math.random() * 8;
+    opp.takeHit(dmg);
+  }
+}
+
+/* ================= БІЙЦІ ================= */
+const f1 = new Fighter(0x3f7bff, -3.1,  1);   // синій, дивиться вправо
+const f2 = new Fighter(0xff6a2a,  3.1, -1);   // вогняний, дивиться вліво
+
+/* ================= HUD ================= */
+const hpEls = [document.getElementById('hp0'), document.getElementById('hp1')];
+const scEls = [document.getElementById('sc0'), document.getElementById('sc1')];
+const roundEl = document.getElementById('round');
+const bannerEl = document.getElementById('banner');
+
+const scores = [0, 0];
+let roundNum = 1;
+
+function updateHUD() {
+  hpEls[0].style.width = (f1.hp / f1.maxHp * 100) + '%';
+  hpEls[1].style.width = (f2.hp / f2.maxHp * 100) + '%';
+  scEls[0].textContent = scores[0];
+  scEls[1].textContent = scores[1];
+  roundEl.textContent = 'РАУНД ' + roundNum;
+}
+
+function banner(text, time = 900) {
+  bannerEl.textContent = text;
+  bannerEl.style.opacity = 1;
+  clearTimeout(bannerEl._t);
+  bannerEl._t = setTimeout(() => bannerEl.style.opacity = 0, time);
+}
+
+/* ================= РАУНДИ ================= */
+let phase = 'fight';   // 'fight' | 'over' | 'wait'
+let phaseTimer = 0;
+
+function resetRound() {
+  f1.pivot.position.x = -3.1;
+  f2.pivot.position.x =  3.1;
+  f1.pivot.rotation.z = 0;
+  f2.pivot.rotation.z = 0;
+  f1.hp = f1.maxHp;
+  f2.hp = f2.maxHp;
+  f1.root.position.y = 0;
+  f2.root.position.y = 0;
+  f1.faceDir =  1; f1.root.rotation.y =  Math.PI / 2;
+  f2.faceDir = -1; f2.root.rotation.y = -Math.PI / 2;
+  f1.setState('idle'); f1.idleWait = 0.3;
+  f2.setState('idle'); f2.idleWait = 0.3;
+  f1.deathT = 0; f2.deathT = 0;
+  roundNum++;
+  updateHUD();
+  banner('РАУНД ' + roundNum, 800);
+}
+
+updateHUD();
+banner('БІЙ!', 900);
+
+/* ================= ЦИКЛ ================= */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  /* ---- фази ---- */
+  if (phase === 'fight') {
+    f1.update(dt, f2);
+    f2.update(dt, f1);
+
+    // розштовхування (щоб не злипались)
+    const d = f2.pivot.position.x - f1.pivot.position.x;
+    if (Math.abs(d) < 1.0) {
+      const push = (1.0 - Math.abs(d)) * 0.5 * Math.sign(d || 1);
+      f1.pivot.position.x -= push;
+      f2.pivot.position.x += push;
+    }
+
+    if (f1.hp <= 0 || f2.hp <= 0) {
+      phase = 'over';
+      phaseTimer = 0;
+      if (f1.hp <= 0 && f2.hp <= 0) {
+        banner('НІЧИЯ', 1400);
+      } else if (f1.hp <= 0) {
+        scores[1]++; updateHUD();
+        banner('ПОЛУМ\'Я ПЕРЕМАГАЄ', 1400);
+      } else {
+        scores[0]++; updateHUD();
+        banner('КРИГА ПЕРЕМАГАЄ', 1400);
+      }
+    }
+  } else if (phase === 'over') {
+    phaseTimer += dt;
+    f1.update(dt, f2);
+    f2.update(dt, f1);
+    if (phaseTimer > 2.2) {
+      phase = 'fight';
+      resetRound();
+    }
+  }
+
+  /* ---- частинки ---- */
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const pt = particles[i];
+    pt.life += dt;
+    const k = pt.life / pt.max;
+    if (k >= 1) {
+      scene.remove(pt.m);
+      pt.m.material.dispose();
+      particles.splice(i, 1);
+      continue;
+    }
+    pt.v.y -= 9.5 * dt;
+    pt.m.position.addScaledVector(pt.v, dt);
+    pt.m.material.opacity = 1 - k;
+    pt.m.scale.setScalar(1 - k * 0.6);
+  }
+
+  /* ---- камера ---- */
+  const midX = (f1.pivot.position.x + f2.pivot.position.x) * 0.5;
+  const targetX = midX * 0.35;
+  camera.position.x += (targetX - camera.position.x) * Math.min(1, dt * 2.5);
+
+  if (shake > 0) {
+    shake = Math.max(0, shake - dt * 1.6);
+    camera.position.x += (Math.random() - 0.5) * shake;
+    camera.position.y = 3.5 + (Math.random() - 0.5) * shake * 1.5;
+  } else {
+    camera.position.y += (3.5 - camera.position.y) * Math.min(1, dt * 4);
+  }
+  camera.position.z = 9.5 + Math.sin(clock.elapsedTime * 0.25) * 0.35;
+  camera.lookAt(midX * 0.35, 1.35, 0);
+
+  // легке дихання неонових ліхтарів
+  lightA.intensity = 80 + Math.sin(clock.elapsedTime * 3.1) * 20;
+  lightB.intensity = 80 + Math.sin(clock.elapsedTime * 2.7 + 2) * 20;
+
+  renderer.render(scene, camera);
+}
+
+animate();
+</script>
+</body>
+</html>  
